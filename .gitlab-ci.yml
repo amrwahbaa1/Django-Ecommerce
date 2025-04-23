@@ -1,0 +1,62 @@
+stages:
+  - build
+  - test
+  - scan
+  - deploy 
+  - docker 
+  - push 
+
+build_app:
+  stage: build
+  script:
+    - pip install -r requirements.txt 
+    - python manage.py build 
+  
+  artifacts:
+    paths: [build/]
+
+test:
+  stage: test 
+  script:
+    - pip install -r requirements.txt
+    - pip install pytest
+    - pytest
+  needs: [build_app]
+
+scan:
+  stage: scan
+  script:
+    - pip install bandit safety
+    - bandit -r . || true 
+    - safety check -r requirements.txt || true
+  needs: [test]
+
+deploy:
+  stage: deploy 
+  script:
+    - ./scripts/deploy_staging.sh build "$STAGING_SSH_USER@$STAGING_SSH_HOST" "$STAGING_DIR"
+  only:
+    - main
+  environment:
+    name: staging 
+    url: https://$STAGING_SSH_HOST
+
+docker_build:
+  stage: docker
+  image: docker:24.0
+  services: [docker:dind]
+  variables:
+    DOCKER_DRIVER: overlay2
+  script:
+    - docker build -t $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA .
+    - docker save $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA > image.tar
+  artifacts:
+    paths: [image.tar]
+
+push_image:
+  stage: push
+  script:
+    - docker load < image.tar
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY
+    - docker push $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
+  needs: [docker_build]
